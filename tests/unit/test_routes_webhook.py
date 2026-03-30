@@ -1,4 +1,5 @@
 import json
+import logging
 from unittest.mock import patch
 
 
@@ -18,7 +19,10 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps(sample_workflow_job_payload),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'workflow_job'}
+            headers={
+                'X-GitHub-Event': 'workflow_job',
+                'X-GitHub-Delivery': 'abc-123-def'
+            }
         )
 
         assert response.status_code == 200
@@ -51,7 +55,10 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps(payload),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'workflow_job'}
+            headers={
+                'X-GitHub-Event': 'workflow_job',
+                'X-GitHub-Delivery': 'delivery-created-001'
+            }
         )
 
         assert response.status_code == 200
@@ -79,7 +86,10 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps(payload),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'workflow_job'}
+            headers={
+                'X-GitHub-Event': 'workflow_job',
+                'X-GitHub-Delivery': 'delivery-deleted-001'
+            }
         )
 
         assert response.status_code == 200
@@ -111,7 +121,10 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps(payload),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'workflow_job'}
+            headers={
+                'X-GitHub-Event': 'workflow_job',
+                'X-GitHub-Delivery': 'delivery-ignored-001'
+            }
         )
 
         assert response.status_code == 200
@@ -128,7 +141,10 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps(sample_installation_payload),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'installation'}
+            headers={
+                'X-GitHub-Event': 'installation',
+                'X-GitHub-Delivery': 'delivery-install-001'
+            }
         )
 
         assert response.status_code == 200
@@ -144,7 +160,10 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps(payload),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'unknown_event'}
+            headers={
+                'X-GitHub-Event': 'unknown_event',
+                'X-GitHub-Delivery': 'delivery-unknown-001'
+            }
         )
 
         assert response.status_code == 200
@@ -162,7 +181,10 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps(sample_workflow_job_payload),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'workflow_job'}
+            headers={
+                'X-GitHub-Event': 'workflow_job',
+                'X-GitHub-Delivery': 'delivery-error-001'
+            }
         )
 
         assert response.status_code == 500
@@ -181,7 +203,8 @@ class TestWebhookRoutes:
             content_type='application/json',
             headers={
                 'X-GitHub-Event': 'workflow_job',
-                'X-Hub-Signature-256': 'invalid'
+                'X-Hub-Signature-256': 'invalid',
+                'X-GitHub-Delivery': 'delivery-sig-001'
             }
         )
 
@@ -194,8 +217,168 @@ class TestWebhookRoutes:
             '/webhook',
             data=json.dumps({'zen': 'test'}),
             content_type='application/json',
-            headers={'X-GitHub-Event': 'ping'}
+            headers={
+                'X-GitHub-Event': 'ping',
+                'X-GitHub-Delivery': 'delivery-ping-001'
+            }
         )
 
         assert response.status_code == 200
         assert response.json['status'] == 'success'
+
+
+class TestWebhookDeliveryIdLogging:
+    """Tests to verify that X-GitHub-Delivery header is logged for correlation."""
+
+    @patch('app.routes.webhook.verify_github_signature')
+    @patch('app.routes.webhook.WebhookService')
+    def test_delivery_id_logged_on_workflow_job(
+        self, mock_webhook_service, mock_verify, client, caplog
+    ):
+        """Test that delivery_id is logged when processing a workflow_job event."""
+        mock_verify.return_value = True
+        mock_service_instance = mock_webhook_service.return_value
+        mock_service_instance.handle_workflow_job.return_value = {
+            "action": "created",
+            "runner_name": "runner-abc123"
+        }
+
+        payload = {
+            'action': 'queued',
+            'workflow_job': {'labels': ['gcp-ubuntu-24.04']},
+            'repository': {
+                'html_url': 'https://github.com/owner/repo',
+                'full_name': 'owner/repo'
+            }
+        }
+
+        with caplog.at_level(logging.INFO, logger='app.routes.webhook'):
+            client.post(
+                '/webhook',
+                data=json.dumps(payload),
+                content_type='application/json',
+                headers={
+                    'X-GitHub-Event': 'workflow_job',
+                    'X-GitHub-Delivery': 'f47ac10b-58cc-4372-a567-0e02b2c3d479'
+                }
+            )
+
+        assert any(
+            'f47ac10b-58cc-4372-a567-0e02b2c3d479' in record.message
+            for record in caplog.records
+        ), "delivery_id was not found in log output"
+
+    @patch('app.routes.webhook.verify_github_signature')
+    def test_delivery_id_logged_on_unknown_event(self, mock_verify, client, caplog):
+        """Test that delivery_id is logged for unknown event types."""
+        mock_verify.return_value = True
+
+        with caplog.at_level(logging.WARNING, logger='app.routes.webhook'):
+            client.post(
+                '/webhook',
+                data=json.dumps({'action': 'test'}),
+                content_type='application/json',
+                headers={
+                    'X-GitHub-Event': 'unknown_event',
+                    'X-GitHub-Delivery': 'aaaabbbb-cccc-dddd-eeee-ffffffffffff'
+                }
+            )
+
+        assert any(
+            'aaaabbbb-cccc-dddd-eeee-ffffffffffff' in record.message
+            for record in caplog.records
+        ), "delivery_id was not found in log output for unknown event"
+
+    @patch('app.routes.webhook.verify_github_signature')
+    def test_delivery_id_logged_on_invalid_signature(self, mock_verify, client, caplog):
+        """Test that delivery_id is logged when signature verification fails."""
+        mock_verify.return_value = False
+
+        with caplog.at_level(logging.ERROR, logger='app.routes.webhook'):
+            client.post(
+                '/webhook',
+                data=json.dumps({'test': 'data'}),
+                content_type='application/json',
+                headers={
+                    'X-GitHub-Event': 'workflow_job',
+                    'X-Hub-Signature-256': 'invalid',
+                    'X-GitHub-Delivery': '11112222-3333-4444-5555-666677778888'
+                }
+            )
+
+        assert any(
+            '11112222-3333-4444-5555-666677778888' in record.message
+            for record in caplog.records
+        ), "delivery_id was not found in log output for invalid signature"
+
+    @patch('app.routes.webhook.verify_github_signature')
+    @patch('app.routes.webhook.WebhookService')
+    def test_delivery_id_logged_on_webhook_error(
+        self, mock_webhook_service, mock_verify, client, caplog
+    ):
+        """Test that delivery_id is logged when webhook processing fails."""
+        mock_verify.return_value = True
+        mock_service_instance = mock_webhook_service.return_value
+        mock_service_instance.handle_workflow_job.side_effect = Exception("boom")
+
+        payload = {
+            'action': 'queued',
+            'workflow_job': {'labels': ['gcp-ubuntu-24.04']},
+            'repository': {
+                'html_url': 'https://github.com/owner/repo',
+                'full_name': 'owner/repo'
+            }
+        }
+
+        with caplog.at_level(logging.ERROR, logger='app.routes.webhook'):
+            client.post(
+                '/webhook',
+                data=json.dumps(payload),
+                content_type='application/json',
+                headers={
+                    'X-GitHub-Event': 'workflow_job',
+                    'X-GitHub-Delivery': 'error-delivery-id-999'
+                }
+            )
+
+        assert any(
+            'error-delivery-id-999' in record.message
+            for record in caplog.records
+        ), "delivery_id was not found in error log output"
+
+    @patch('app.routes.webhook.verify_github_signature')
+    @patch('app.routes.webhook.WebhookService')
+    def test_delivery_id_none_when_header_missing(
+        self, mock_webhook_service, mock_verify, client, caplog
+    ):
+        """Test that delivery_id is logged as None when header is missing."""
+        mock_verify.return_value = True
+        mock_service_instance = mock_webhook_service.return_value
+        mock_service_instance.handle_workflow_job.return_value = {
+            "action": "created",
+            "runner_name": "runner-no-delivery"
+        }
+
+        payload = {
+            'action': 'queued',
+            'workflow_job': {'labels': ['gcp-ubuntu-24.04']},
+            'repository': {
+                'html_url': 'https://github.com/owner/repo',
+                'full_name': 'owner/repo'
+            }
+        }
+
+        with caplog.at_level(logging.INFO, logger='app.routes.webhook'):
+            response = client.post(
+                '/webhook',
+                data=json.dumps(payload),
+                content_type='application/json',
+                headers={'X-GitHub-Event': 'workflow_job'}
+            )
+
+        assert response.status_code == 200
+        # delivery_id should be None in the log since header was not sent
+        assert any(
+            'delivery_id: None' in record.message
+            for record in caplog.records
+        ), "delivery_id: None was not found in log output when header is missing"
