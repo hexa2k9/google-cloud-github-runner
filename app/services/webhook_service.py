@@ -41,7 +41,11 @@ class WebhookService:
         return True
 
     def handle_workflow_job(self, payload):
-        """Process the workflow_job webhook payload from GitHub."""
+        """Process the workflow_job webhook payload from GitHub.
+
+        Returns:
+            dict: A result dict with 'action' and 'runner_name' keys.
+        """
         # Validate payload structure
         self._validate_payload(payload)
 
@@ -66,45 +70,73 @@ class WebhookService:
                         template_name = label
                         break
             if template_name:
-                logger.info("Found matching gcp- label prefix: %s", template_name)
-                self._handle_queued_job(template_name, repo_url, repo_owner_url, repo_name, org_name)
+                logger.info("Found matching label prefix: %s", template_name)
+                instance_name = self._handle_queued_job(
+                    template_name, repo_url, repo_owner_url, repo_name, org_name
+                )
+                return {'action': 'created', 'runner_name': instance_name}
             else:
-                logger.warning("No matching gcp- label prefix found for labels %s. Ignoring job.", labels)
+                logger.warning(
+                    "No matching gcp- label prefix found for labels %s. Ignoring job.",
+                    labels,
+                )
+                return {'action': 'ignored', 'runner_name': None}
 
         # https://docs.github.com/en/webhooks/webhook-events-and-payloads?actionType=completed#workflow_job
         elif action == 'completed':
-            self._handle_completed_job(workflow_job)
+            runner_name = self._handle_completed_job(workflow_job)
+            return {'action': 'deleted', 'runner_name': runner_name}
 
-    def _handle_queued_job(self, template_name, repo_url, repo_owner_url, repo_name, org_name):
-        """Handle queued workflow job."""
+        return {'action': 'ignored', 'runner_name': None}
+
+    def _handle_queued_job(
+        self, template_name, repo_url, repo_owner_url, repo_name, org_name
+    ):
+        """Handle queued workflow job.
+
+        Returns:
+            str or None: The name of the created runner instance.
+        """
         try:
             # Get registration token
             if org_name:
                 # Create GitHub Actions runner instance for organization
                 token = self.github_client.get_registration_token(org_name=org_name)
-                self.gcloud_client.create_runner_instance(token, repo_owner_url, template_name, repo_name)
+                return self.gcloud_client.create_runner_instance(
+                    token, repo_owner_url, template_name, repo_name
+                )
             elif repo_name:
                 # Create GitHub Actions runner instance for repository
                 token = self.github_client.get_registration_token(repo_name=repo_name)
-                self.gcloud_client.create_runner_instance(token, repo_url, template_name, repo_name)
+                return self.gcloud_client.create_runner_instance(
+                    token, repo_url, template_name, repo_name
+                )
             else:
-                logger.error("Neither repository nor organization found in payload. Ignoring job.")
-                return
+                logger.error(
+                    "Neither repository nor organization found in payload. Ignoring job."
+                )
+                return None
 
         except Exception as e:
             logger.error("Failed to spawn runner: %s", str(e))
             raise
 
     def _handle_completed_job(self, workflow_job):
-        """Handle completed workflow job."""
+        """Handle completed workflow job.
+
+        Returns:
+            str or None: The name of the deleted runner instance.
+        """
         runner_name = workflow_job.get('runner_name')
         logger.info("Job completed. Cleaning up runner: %s", runner_name)
 
         if not runner_name:
             logger.warning("Job completed but no runner_name found in payload.")
-            return
+            return None
 
         try:
             self.gcloud_client.delete_runner_instance(runner_name)
+            return runner_name
         except Exception as e:
             logger.error("Failed to delete runner %s: %s", runner_name, str(e))
+            return runner_name

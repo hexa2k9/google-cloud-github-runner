@@ -59,8 +59,17 @@ def handle_workflow_job_event(payload):
     """Handle workflow_job event."""
     try:
         webhook_service = WebhookService()
-        webhook_service.handle_workflow_job(payload)
-        return jsonify({'status': 'success'}), 200
+        result = webhook_service.handle_workflow_job(payload)
+        return (
+            jsonify(
+                {
+                    'status': 'success',
+                    'action': result.get('action'),
+                    'runner_name': result.get('runner_name'),
+                }
+            ),
+            200,
+        )
     except ValueError as e:
         logger.error("[Webhook] Validation error: %s", str(e))
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400

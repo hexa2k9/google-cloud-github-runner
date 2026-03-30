@@ -13,6 +13,7 @@ class TestWebhookService:
         mock_gh_client_class.return_value = mock_gh_client
 
         mock_gc_client = Mock()
+        mock_gc_client.create_runner_instance.return_value = "runner-abc123"
         mock_gc_client_class.return_value = mock_gc_client
 
         service = WebhookService()
@@ -28,8 +29,9 @@ class TestWebhookService:
             }
         }
 
-        service.handle_workflow_job(payload)
+        result = service.handle_workflow_job(payload)
 
+        assert result == {"action": "created", "runner_name": "runner-abc123"}
         mock_gh_client.get_registration_token.assert_called_once_with(repo_name='owner/repo')
         mock_gc_client.create_runner_instance.assert_called_once_with(
             'fake-token',
@@ -47,6 +49,7 @@ class TestWebhookService:
         mock_gh_client_class.return_value = mock_gh_client
 
         mock_gc_client = Mock()
+        mock_gc_client.create_runner_instance.return_value = "runner-org456"
         mock_gc_client_class.return_value = mock_gc_client
 
         service = WebhookService()
@@ -65,8 +68,9 @@ class TestWebhookService:
             }
         }
 
-        service.handle_workflow_job(payload)
+        result = service.handle_workflow_job(payload)
 
+        assert result == {"action": "created", "runner_name": "runner-org456"}
         mock_gh_client.get_registration_token.assert_called_once_with(org_name='my-org')
 
     @patch('app.services.webhook_service.GCloudClient')
@@ -92,8 +96,9 @@ class TestWebhookService:
             }
         }
 
-        service.handle_workflow_job(payload)
+        result = service.handle_workflow_job(payload)
 
+        assert result == {"action": "ignored", "runner_name": None}
         mock_gh_client.get_registration_token.assert_not_called()
         mock_gc_client.create_runner_instance.assert_not_called()
 
@@ -116,8 +121,9 @@ class TestWebhookService:
             }
         }
 
-        service.handle_workflow_job(payload)
+        result = service.handle_workflow_job(payload)
 
+        assert result == {"action": "deleted", "runner_name": "runner-12345"}
         mock_gc_client.delete_runner_instance.assert_called_once_with('runner-12345')
 
     @patch('app.services.webhook_service.GCloudClient')
@@ -137,8 +143,9 @@ class TestWebhookService:
             'workflow_job': {}
         }
 
-        service.handle_workflow_job(payload)
+        result = service.handle_workflow_job(payload)
 
+        assert result == {"action": "deleted", "runner_name": None}
         mock_gc_client.delete_runner_instance.assert_not_called()
 
     @patch('app.services.webhook_service.GCloudClient')
@@ -187,8 +194,9 @@ class TestWebhookService:
             }
         }
 
-        service.handle_workflow_job(payload)
+        result = service.handle_workflow_job(payload)
 
+        assert result == {"action": "created", "runner_name": None}
         mock_gh_client.get_registration_token.assert_not_called()
         mock_gc_client.create_runner_instance.assert_not_called()
 
@@ -212,7 +220,8 @@ class TestWebhookService:
             }
         }
 
-        # Should not raise exception, just log error
-        service.handle_workflow_job(payload)
+        # Should not raise exception, just log error and return runner_name
+        result = service.handle_workflow_job(payload)
 
+        assert result == {"action": "deleted", "runner_name": "runner-12345"}
         mock_gc_client.delete_runner_instance.assert_called_once_with('runner-12345')
